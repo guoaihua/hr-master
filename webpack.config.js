@@ -1,7 +1,8 @@
 const path = require("path");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
-const webpack = require("webpack");
-require("dotenv").config();
+
+const isProd = process.env.NODE_ENV === "production"
+const publicPath = normalizePublicPath(isProd ? '/hr' : "/");
 
 module.exports = {
   entry: "./src/main.tsx",
@@ -9,6 +10,7 @@ module.exports = {
     path: path.resolve(__dirname, "dist"),
     filename: "bundle.[contenthash].js",
     clean: true,
+    publicPath,
   },
   resolve: {
     extensions: [".ts", ".tsx", ".js"],
@@ -33,22 +35,29 @@ module.exports = {
   plugins: [
     new HtmlWebpackPlugin({
       template: "./public/index.html",
-    }),
-    new webpack.DefinePlugin({
-      "import.meta.env.VITE_LLM_API_KEY": JSON.stringify(
-        process.env.VITE_LLM_API_KEY || ""
-      ),
-      "import.meta.env.NODE_ENV": JSON.stringify(
-        process.env.NODE_ENV || "development"
-      ),
+      templateParameters: {
+        publicPath,
+      },
     }),
   ],
   devServer: {
     port: 4173,
     host: "0.0.0.0",
+    proxy: [
+      {
+        context: ["/api"],
+        target: "http://127.0.0.1:3001",
+      },
+    ],
     historyApiFallback: true,
     static: {
       directory: path.join(__dirname, "public"),
     },
   },
 };
+
+function normalizePublicPath(value) {
+  const raw = String(value || "/").trim();
+  if (!raw || raw === "/") return "/";
+  return `/${raw.replace(/^\/+|\/+$/g, "")}/`;
+}

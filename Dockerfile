@@ -1,18 +1,24 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-ARG VITE_LLM_API_KEY
-ENV VITE_LLM_API_KEY=${VITE_LLM_API_KEY}
-
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci
 
 COPY . .
 RUN npm run build
 
-FROM nginx:1.27-alpine
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=builder /app/dist /usr/share/nginx/html
+FROM node:20-alpine AS runner
+WORKDIR /app
 
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+ENV NODE_ENV=production
+ENV PORT=3001
+
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
+
+COPY --from=builder /app/dist ./dist
+COPY server ./server
+COPY server.mjs ./
+
+EXPOSE 3001
+CMD ["node", "server.mjs"]

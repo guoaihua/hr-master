@@ -1,4 +1,4 @@
-import { readResumeForModel } from "./lib/fileUtils.js";
+import { assertSupportedResumeFile } from "./lib/fileUtils.js";
 import {
   readHistory as readHistoryFromStorage,
   readSavedAnalysis as readSavedAnalysisFromStorage,
@@ -13,17 +13,13 @@ import {
 } from "./legacy/store.js";
 import { renderUpload as renderUploadView, renderPreview as renderPreviewView, renderWorkbench as renderWorkbenchView } from "./legacy/views.js";
 import {
-  buildInitialMessages,
-  buildSectionMessages,
-  callLLMJson,
   ensureLLMConfigured,
   llmStatusText,
+  parseResumeWithServer,
+  regenerateSectionWithServer,
 } from "./lib/llm.js";
-import { getApiKey, isApiKeyConfigured, loadEnvConfig } from "./lib/env.js";
 
 const LLM_CONFIG = {
-  baseURL: "https://www.dmxapi.cn/v1",
-  apiKey: getApiKey(),
   model: "mimo-v2.5-pro",
   useHardcodedResult: false,
 };
@@ -62,13 +58,13 @@ const SECTION_META = {
 
 const HARDCODED_MODEL_ANALYSIS = {
   candidate: {
-    name: "何蔓菱",
+    name: "候选人A",
     targetRole: "HR实习生-招聘方向",
     summary:
-      "武汉大学数字媒体技术专业2028届本科在读。拥有游戏策划助理实习生、互联网运营实习生经验，掌握用户研究、数据分析、内容策划与用户运营技能。具备数据分析工具技能（Excel、SPSS、SQL）及游戏引擎使用经验（Cocos Creator），辅修经济学，逻辑分析能力较强。期望转向HR（招聘方向）领域，将技术背景与人际敏感度结合。",
+      "某重点高校数字媒体相关专业2028届本科在读。拥有游戏策划助理实习生、互联网运营实习生经验，掌握用户研究、数据分析、内容策划与用户运营技能。具备数据分析工具技能（Excel、SPSS、SQL）及游戏引擎使用经验（Cocos Creator），辅修经济学，逻辑分析能力较强。期望转向HR（招聘方向）领域，将技术背景与人际敏感度结合。",
     education: [
       {
-        school: "武汉大学",
+        school: "某重点高校",
         major: "数字媒体技术",
         degree: "本科",
         startDate: "2024-09",
@@ -78,7 +74,7 @@ const HARDCODED_MODEL_ANALYSIS = {
     ],
     experience: [
       {
-        company: "腾讯（武汉）科技有限公司",
+        company: "某头部互联网公司",
         role: "游戏策划助理实习生",
         startDate: "2025-07",
         endDate: "2025-10",
@@ -86,7 +82,7 @@ const HARDCODED_MODEL_ANALYSIS = {
           "1. 参与2款移动端游戏的新手引导流程优化，通过用户行为数据埋点与AB测试，将新手次日留存率提升了8%。\n2. 协助资深策划进行竞品分析，完成3份详细的竞品体验报告，提出5项功能优化建议，其中2项被采纳并排期开发。\n3. 参与需求文档的撰写与维护，确保开发、美术团队对需求理解一致，减少沟通返工。",
       },
       {
-        company: "字节跳动（武汉）分公司",
+        company: "某大型内容平台公司",
         role: "互联网运营实习生",
         startDate: "2025-03",
         endDate: "2025-06",
@@ -146,6 +142,7 @@ const HARDCODED_MODEL_ANALYSIS = {
       background:
         "你简历中主要实习经历是游戏策划和互联网运营，但申请的是HR实习生（招聘方向）。请具体谈谈你为什么想做HR，特别是招聘？你认为自己过往的哪些经历或能力能让你胜任这个看起来‘跨专业’的岗位？",
       openEnded: "你对招聘工作的理解是什么？它和你在腾讯做用户研究、在字节做内容运营有哪些底层能力是相通的？",
+      openEnded: "你对招聘工作的理解是什么？它和你在过往用户研究、内容运营工作中积累的能力有哪些底层共通点？",
       situational: "假设你成功入职，在协助校招时，遇到一个专业对口但性格内向、表达不佳的候选人，你会如何向面试官推荐或评估他？",
       tips:
         "关注回答的逻辑性和深度，是否将“用户研究”思维迁移到“候选人评估”，将“内容运营”能力与“雇主品牌建设”联系起来。",
@@ -155,7 +152,7 @@ const HARDCODED_MODEL_ANALYSIS = {
       dimension: "用户/人际敏感度",
       topic: "从用户洞察到候选人洞察",
       background:
-        "你在腾讯实习时通过用户行为数据优化了新手引导，在字节通过调研整理了用户需求画像。请分享一个你通过观察或分析，深入理解某个用户（或同学/队友）真实需求或性格特点的实例。",
+        "你在过往实习中通过用户行为数据优化流程，也通过调研整理过用户需求画像。请分享一个你通过观察或分析，深入理解某个用户（或同学/队友）真实需求或性格特点的实例。",
       openEnded: "如果让你用做用户研究的方法（如问卷、访谈）来评估一个岗位的候选人画像，你会关注哪些维度？",
       situational: "在一次模拟群面中，你观察到一位候选人很安静，但发言时逻辑特别清晰。另一位候选人很活跃，但观点有些发散。你会如何快速记录和评价这两位？",
       tips: "考察其是否具备将用户分析能力转化为识人能力的潜力。关注其描述是否具体，分析是否透彻。",
@@ -164,7 +161,7 @@ const HARDCODED_MODEL_ANALYSIS = {
       id: 3,
       dimension: "沟通与协调能力",
       topic: "跨团队协作与文档能力",
-      background: "你提到在腾讯撰写需求文档，确保开发、美术理解一致。请描述一个你遇到的沟通困难（例如理解偏差），你是如何解决的？",
+      background: "你提到在过往实习中撰写需求文档并协同开发、设计等角色。请描述一个你遇到的沟通困难（例如理解偏差），你是如何解决的？",
       openEnded: "你认为一份优秀的招聘需求（JD）和一份优秀的产品需求文档（PRD）在写法和目标上有什么异同？",
       situational: "业务部门催得很急，要求你明天就提供一批高质量简历，但现有的简历库质量参差不齐。你会如何与业务主管沟通并安排工作？",
       tips: "关注其沟通方式是否主动、有条理，以及书面表达是否清晰。在HR工作中，协调业务部门是关键。",
@@ -248,30 +245,30 @@ const HARDCODED_MODEL_ANALYSIS = {
   },
 };
 
-const SAMPLE_RESUME_TEXT = `李娜（HR实习生-招聘方向）
-教育背景：华中师范大学硕士在读（公共管理学-社会保障方向），中南民族大学本科（劳动与社会保障）。
-核心经历：曾于北京数字政通科技股份有限公司和广州中望龙腾软件有限公司担任人力实习生，具备全流程招聘支持经验，尤其在研发、销售、售前等岗位的社招和校招方面有具体成果，如成功招聘C++开发5人，售前签约7人等。
-其他经历：曾任中南民族大学公共管理学院办公室助理、年级学生会生活部部长，参与过靖西市壬庄乡人民政府党政办公助理工作，具备文件管理、信息传达、会议准备、安全管理、评议工作、沟通协调等经验。
+const SAMPLE_RESUME_TEXT = `候选人B（HR实习生-招聘方向）
+教育背景：某师范类高校硕士在读（公共管理学-社会保障方向），某综合院校本科（劳动与社会保障）。
+核心经历：曾于某数字化企业和某工业软件企业担任人力实习生，具备全流程招聘支持经验，尤其在研发、销售、售前等岗位的社招和校招方面有具体成果，如成功招聘技术岗位5人，售前签约7人等。
+其他经历：曾任某学院办公室助理、年级学生组织负责人，参与过基层政府办公室助理工作，具备文件管理、信息传达、会议准备、安全管理、评议工作、沟通协调等经验。
 技能证书：大学生英语六级、全国计算机二级证书、高中教师资格证。`;
 
 const SAMPLE_ANALYSIS = {
   candidate: {
-    name: "李娜",
+    name: "候选人B",
     targetRole: "HR实习生-招聘方向",
     summary:
       "候选人具备科技公司 HR 实习经历，参与过研发、销售、售前等岗位招聘，并有较多量化成果。其公共管理与劳动保障背景、教师资格证和学生干部经历可作为沟通表达、流程意识和学习迁移能力的补充侧证。",
     education: [
-      "华中师范大学硕士在读，公共管理学-社会保障方向",
-      "中南民族大学本科，劳动与社会保障",
+      "某师范类高校硕士在读，公共管理学-社会保障方向",
+      "某综合院校本科，劳动与社会保障",
     ],
     experience: [
-      "北京数字政通科技股份有限公司，人力实习生，参与销售、售前、项目经理等岗位招聘支持",
-      "广州中望龙腾软件有限公司，人力实习生，参与 C++ 开发、测试、人力实习生等岗位招聘支持",
+      "某数字化企业，人力实习生，参与销售、售前、项目经理等岗位招聘支持",
+      "某工业软件企业，人力实习生，参与 C++ 开发、测试、人力实习生等岗位招聘支持",
     ],
     otherExperience: [
-      "中南民族大学公共管理学院办公室助理",
+      "某学院办公室助理",
       "年级学生会生活部部长",
-      "靖西市壬庄乡人民政府党政办公助理",
+      "基层政府办公室助理",
     ],
     skills: ["简历筛选", "面试邀约", "招聘流程跟进", "员工关系支持", "文件管理"],
     certificates: ["大学生英语六级", "全国计算机二级证书", "高中教师资格证"],
@@ -403,7 +400,7 @@ const SAMPLE_ANALYSIS = {
     "AI 工具相关问题要要求候选人说清楚输入、输出、修正和校验过程。",
   ],
   source: {
-    fileName: "李娜样例.md",
+    fileName: "匿名候选人样例.md",
     targetRole: "HR实习生-招聘方向",
     resumeText: SAMPLE_RESUME_TEXT,
     updatedAt: new Date().toISOString(),
@@ -481,24 +478,21 @@ async function processFile(file, targetRole) {
 
   try {
     ensureLLMConfigured(LLM_CONFIG);
-    const resumeInput = await readResumeForModel(file);
+    assertSupportedResumeFile(file);
 
     state.status = "正在提交大模型解析简历";
     state.progress = 58;
     render();
 
     const rawAnalysis = await generateInitialAnalysis({
-      fileName: file.name,
+      file,
       targetRole,
-      resumeInput,
     });
 
     const analysis = normalizeAnalysis(rawAnalysis, {
       fileName: file.name,
       targetRole,
-      resumeText: resumeInput.kind === "text" ? resumeInput.text : `[${resumeInput.mimeType}] ${file.name}`,
       updatedAt: new Date().toISOString(),
-      model: LLM_CONFIG.model,
     });
 
     state.progress = 100;
@@ -512,9 +506,8 @@ async function processFile(file, targetRole) {
   }
 }
 
-async function generateInitialAnalysis({ fileName, targetRole, resumeInput }) {
-  const messages = buildInitialMessages({ fileName, targetRole, resumeInput, llmConfig: LLM_CONFIG });
-  return callLLMJson(messages, LLM_CONFIG, HARDCODED_MODEL_ANALYSIS, deepClone);
+async function generateInitialAnalysis({ file, targetRole }) {
+  return parseResumeWithServer(file, targetRole, LLM_CONFIG, HARDCODED_MODEL_ANALYSIS, deepClone);
 }
 
 async function regenerateSection(section) {
@@ -527,14 +520,14 @@ async function regenerateSection(section) {
     renderPreview();
 
     const extraPrompt = document.querySelector(`[data-extra="${section}"]`)?.value || "";
-    const messages = buildSectionMessages({
+    const payload = await regenerateSectionWithServer({
       section,
       analysis: state.analysisDraft,
       extraPrompt,
-      sectionMeta: SECTION_META,
-      toPrettyJson,
+      llmConfig: LLM_CONFIG,
+      hardcodedAnalysis: HARDCODED_MODEL_ANALYSIS,
+      deepClone,
     });
-    const payload = await callLLMJson(messages, LLM_CONFIG, HARDCODED_MODEL_ANALYSIS, deepClone);
     mergeSection(section, payload);
     state.analysisDraft = normalizeAnalysis(state.analysisDraft, state.analysisDraft.source);
     syncEditorText();
@@ -752,17 +745,6 @@ export function mountLegacyApp(containerSelector = "#app") {
   app = document.querySelector(containerSelector);
   if (!app) {
     throw new Error(`Mount container not found: ${containerSelector}`);
-  }
-
-  if (!LLM_CONFIG.useHardcodedResult) {
-    try {
-      const env = loadEnvConfig();
-      LLM_CONFIG.apiKey = env.apiKey;
-    } catch (error) {
-      state.error = error.message;
-    }
-  } else if (isApiKeyConfigured()) {
-    LLM_CONFIG.apiKey = getApiKey();
   }
 
   render();

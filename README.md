@@ -1,8 +1,9 @@
-# InterviewMaster (React + TypeScript + Webpack)
+# InterviewMaster (React + TypeScript + Webpack + Express)
 
 智能面试助手前端项目，支持：
-- 上传简历（文本/文件）
-- 大模型结构化解析（当前支持硬编码结果模式）
+- 上传简历（文本 / PDF）
+- 服务端接管大模型结构化解析
+- PDF 服务端预解析后再送入大模型
 - 解析结果预览、分区重生成、确认保存
 - 面试工作台展示（档案/维度/问题/小贴士）
 
@@ -11,7 +12,8 @@
 - React 18
 - TypeScript
 - Webpack 5
-- Docker (Nginx 静态部署)
+- Express
+- Docker
 
 ## 目录结构
 
@@ -19,6 +21,11 @@
 .
 ├── public/
 │   └── index.html
+├── server/
+│   ├── app.mjs                  # Express API 与静态资源托管
+│   └── lib/
+│       ├── llm.mjs              # 服务端 LLM 调用与 prompt 构造
+│       └── resume.mjs           # 文本/PDF 简历预解析
 ├── src/
 │   ├── App.tsx
 │   ├── main.tsx
@@ -29,12 +36,11 @@
 │   │   ├── bindings.js             # DOM 事件绑定
 │   │   └── store.js                # 状态初始化与动作
 │   └── lib/
-│       ├── llm.js                  # 大模型调用与提示词构造
+│       ├── llm.js                  # 前端调用本地 API
 │       ├── storage.js              # localStorage 读写
-│       └── fileUtils.js            # 文件读取与简历输入预处理
-├── docker/
-│   └── nginx.conf
+│       └── fileUtils.js            # 上传文件类型校验
 ├── Dockerfile
+├── server.mjs
 ├── webpack.config.js
 ├── tsconfig.json
 └── package.json
@@ -57,28 +63,44 @@ cp .env.example .env
 在 `.env` 中填写：
 
 ```bash
-VITE_LLM_API_KEY=你的真实APIKey
+LLM_API_KEY=你的真实APIKey
+# 可选
+LLM_BASE_URL=https://www.dmxapi.cn/v1
+LLM_MODEL=mimo-v2.5-pro
+PORT=3001
 ```
 
-启动开发服务器：
+如果页面通过 Nginx 挂在子路径，例如 `/hr/`，构建时追加：
+
+```bash
+PUBLIC_PATH=/hr/ npm run build
+```
+
+这样前端静态资源和前端发起的 API 请求都会带上 `/hr/` 前缀。
+
+启动开发环境：
 
 ```bash
 npm start
 ```
 
-默认地址：
+默认：
 
 ```text
-http://localhost:4173/
+前端：http://localhost:4173/
+服务端：http://localhost:3001/
 ```
+
+开发期前端会通过 webpack proxy 把 `/api` 转发到 Express 服务端。
 
 ## 生产构建
 
 ```bash
 npm run build
+npm run serve
 ```
 
-构建产物输出到 `dist/`。
+构建产物输出到 `dist/`，并由 Express 统一托管静态页面和 API。
 
 ## Docker 部署
 
@@ -91,43 +113,41 @@ docker build -t interviewmaster .
 运行容器：
 
 ```bash
-docker run --rm -p 8080:80 interviewmaster
+docker run --rm -p 3001:3001 --env-file .env interviewmaster
 ```
 
 访问：
 
 ```text
-http://localhost:8080/
+http://localhost:3001/
 ```
 
 ## 关键配置
 
-大模型配置位于：
-
-- `src/legacyApp.js` 中 `LLM_CONFIG`
-
-当前默认：
-
-- `useHardcodedResult: false`（默认走真实模型调用）
-
-如需切换真实模型调用：
-
-1. 将 `useHardcodedResult` 改为 `false`
-2. 在 `.env` 配置 `VITE_LLM_API_KEY`
-3. 按需调整 `baseURL / model`
-
-生产环境同样需要注入 `VITE_LLM_API_KEY`，再执行构建：
-
-```bash
-VITE_LLM_API_KEY=你的真实APIKey npm run build
-```
+- 服务端必须配置 `LLM_API_KEY`
+- 可选配置 `LLM_BASE_URL`、`LLM_MODEL`
+- 前端不再注入任何 LLM 密钥
+- 当前正式支持 `TXT / Markdown / JSON / PDF`
+- PDF 会先在服务端提取文字，再传给 OpenAI-compatible 模型做结构化解析
 
 ## 当前重构状态
 
-项目已完成分层拆分（`legacyApp` + `legacy/*` + `lib/*`），功能可用并可构建。
+项目当前已完成：
 
-下一步建议：
+- 前端上传与预览流程
+- 服务端 API 化的 LLM 调用
+- PDF 服务端预解析
+- 基础单元测试与 API 测试
 
-1. 将 `legacy/views.js` 逐步替换为真正 React 组件
-2. 为核心数据结构补充 TypeScript 类型定义（`types.ts`）
-3. 增加基础单元测试与流程测试
+
+
+docker swarm init
+docker build -t interviewmaster:latest .
+docker service create \
+  --name interviewmaster \
+  --publish 3001:3001 \
+  --env LLM_API_KEY=sk-1z04BLtScjucChTa10pIgJrb5u7RRPYVgwqJFLflSg1D6Y8P \
+  --env LLM_BASE_URL=https://www.dmxapi.cn/v1 \
+  --env LLM_MODEL=mimo-v2.5-pro \
+  --env PORT=3001 \
+  interviewmaster:latest

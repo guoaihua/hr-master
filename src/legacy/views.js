@@ -5,8 +5,8 @@ export function renderShell(app, state, content) {
       : state.view === "preview"
         ? '<button class="btn secondary" data-action="back-upload">返回上传</button>'
         : state.savedAnalysis
-          ? '<button class="btn secondary" data-action="continue-saved">继续上次结果</button><button class="btn secondary" data-action="load-sample">加载李娜样例</button>'
-          : '<button class="btn secondary" data-action="load-sample">加载李娜样例</button>';
+          ? '<button class="btn secondary" data-action="continue-saved">继续上次结果</button><button class="btn secondary" data-action="load-sample">加载匿名样例</button>'
+          : '<button class="btn secondary" data-action="load-sample">加载匿名样例</button>';
 
   app.innerHTML = `
     <div class="shell">
@@ -39,7 +39,7 @@ export function renderUpload(app, state, helpers) {
         <p class="eyebrow">大模型结构化解析</p>
         <h1>上传简历，先预览确认，再生成面试工作台</h1>
         <p class="intro-copy">
-          文件会直接交给 OpenAI-compatible 大模型生成统一 JSON。你可以在预览页编辑或分区重生成，确认后才保存并渲染页面。
+          文本简历会直接送服务端解析，PDF 会先提取文字再交给大模型生成统一 JSON。你可以在预览页编辑或分区重生成，确认后才保存并渲染页面。
         </p>
         <div class="feature-grid">
           <div class="feature"><strong>统一结构</strong><span>候选人档案、维度、问题和小贴士都进入同一个 JSON。</span></div>
@@ -62,9 +62,9 @@ export function renderUpload(app, state, helpers) {
               </svg>
             </div>
             <h2>选择或拖拽简历文件</h2>
-            <p>支持 PDF / DOCX / TXT / Markdown / 图片简历。文件会直接提交给支持文件或多模态输入的大模型解析。</p>
+            <p>支持 TXT / Markdown / JSON / PDF。PDF 会先在服务端预解析成文字，再交给大模型处理。</p>
             <button class="btn" type="button">上传并解析</button>
-            <input class="file-input" id="resumeFile" type="file" accept=".txt,.md,.markdown,.json,.pdf,.doc,.docx,.png,.jpg,.jpeg,.webp" />
+            <input class="file-input" id="resumeFile" type="file" accept=".txt,.md,.markdown,.json,.pdf" />
           </div>
         </div>
         <p class="small-note">${escapeHtml(llmStatusText(LLM_CONFIG))}</p>
