@@ -150,4 +150,8 @@ docker service create \
   --env LLM_BASE_URL=https://www.dmxapi.cn/v1 \
   --env LLM_MODEL=mimo-v2.5-pro \
   --env PORT=3001 \
-  interviewmaster:latest
+  ziminga/interviewmaster:latest
+
+
+
+docker service update --image ziminga/interviewmaster:latest --force interviewmaster
