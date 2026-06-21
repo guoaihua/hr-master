@@ -1,6 +1,6 @@
-export async function parseResumeWithServer(file, targetRole, llmConfig, hardcodedAnalysis, deepClone) {
+export async function parseResumeWithServer(file, targetRole, llmConfig, hardcodedAnalysis, deepClone, options = {}) {
   if (llmConfig.useHardcodedResult) {
-    await new Promise((resolve) => window.setTimeout(resolve, 450));
+    await delay(450, options.signal);
     return deepClone(hardcodedAnalysis);
   }
 
@@ -11,9 +11,32 @@ export async function parseResumeWithServer(file, targetRole, llmConfig, hardcod
   const response = await fetch(buildApiUrl("/api/resume/parse"), {
     method: "POST",
     body: formData,
+    signal: options.signal,
   });
 
   return readJsonResponse(response, "简历解析失败");
+}
+
+function delay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+    const timer = window.setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timer);
+        reject(createAbortError());
+      },
+      { once: true },
+    );
+  });
+}
+
+function createAbortError() {
+  return new DOMException("Aborted", "AbortError");
 }
 
 export async function regenerateSectionWithServer({ section, analysis, extraPrompt, llmConfig, hardcodedAnalysis, deepClone }) {

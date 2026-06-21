@@ -1,12 +1,18 @@
+const SUPPORTED_RESUME_EXTENSIONS = new Set(["txt", "md", "markdown", "json", "pdf"]);
+const MAX_RESUME_FILE_SIZE = 10 * 1024 * 1024;
+
 export function renderShell(app, state, content) {
+  const myButton = '<button class="btn secondary" data-action="open-history">我的</button>';
   const action =
     state.view === "workbench"
-      ? '<button class="btn secondary" data-action="restart">重新上传</button>'
+      ? `<button class="btn secondary" data-action="restart">重新上传</button>${myButton}`
       : state.view === "preview"
-        ? '<button class="btn secondary" data-action="back-upload">返回上传</button>'
-        : state.savedAnalysis
-          ? '<button class="btn secondary" data-action="continue-saved">继续上次结果</button><button class="btn secondary" data-action="load-sample">加载匿名样例</button>'
-          : '<button class="btn secondary" data-action="load-sample">加载匿名样例</button>';
+        ? `<button class="btn secondary" data-action="back-upload">返回上传</button>${myButton}`
+        : state.view === "history"
+          ? '<button class="btn secondary" data-action="back-upload">返回首页</button>'
+          : state.savedAnalysis
+            ? `<button class="btn secondary" data-action="continue-saved">继续上次结果</button>${myButton}<button class="btn secondary" data-action="load-sample">加载样例</button>`
+            : `${myButton}<button class="btn secondary" data-action="load-sample">加载样例</button>`;
 
   app.innerHTML = `
     <div class="shell">
@@ -27,8 +33,65 @@ export function renderShell(app, state, content) {
   `;
 }
 
+export function renderHistory(app, state, helpers) {
+  const { bindHeaderActions, bindHistoryActions, readHistory, render, openPreview, hydrateWorkbenchState, resetToUploadState, sampleAnalysis, deepClone } = helpers;
+  const history = readHistory();
+
+  renderShell(
+    app,
+    state,
+    `
+    <main class="history-page">
+      <section class="history-hero">
+        <div>
+          <p class="eyebrow">我的</p>
+          <h1>历史渲染结果</h1>
+          <p>这里会保留最近确认保存过的结构化结果，点击后可以回到对应的面试工作台。</p>
+        </div>
+        <button class="btn" type="button" data-action="back-upload">上传新简历</button>
+      </section>
+      ${
+        history.length
+          ? `<section class="history-list">
+              ${history.map((item, index) => historyItem(item, index)).join("")}
+            </section>`
+          : `<section class="card empty-state">
+              <h3>还没有历史结果</h3>
+              <p>简历解析后在预览页点击“确认并保存”，这里就会出现记录。</p>
+            </section>`
+      }
+    </main>
+  `,
+  );
+
+  bindHeaderActions({
+    state,
+    render,
+    openPreview,
+    hydrateWorkbenchState,
+    resetToUploadState,
+    sampleAnalysis,
+    deepClone,
+    openHistory: helpers.openHistory,
+  });
+  bindHistoryActions({
+    openHistoryItem: helpers.openHistoryItem,
+    editHistoryItem: helpers.editHistoryItem,
+  });
+}
+
 export function renderUpload(app, state, helpers) {
-  const { llmStatusText, LLM_CONFIG, bindHeaderActions, processFile, deepClone, sampleAnalysis, render, openPreview, hydrateWorkbenchState, resetToUploadState } = helpers;
+  const { llmStatusText, LLM_CONFIG, bindHeaderActions, processFile, stopParsing, deepClone, sampleAnalysis, render, openPreview, hydrateWorkbenchState, resetToUploadState, openHistory } = helpers;
+  const uploadDraft = state.uploadDraft || {};
+  const draftTargetRole = uploadDraft.targetRole || "";
+  const draftFileName = uploadDraft.fileName || "";
+  const draftFile = uploadDraft.file || null;
+  const isParsing = Boolean(state.status);
+  const roleHint = buildRoleHint(draftTargetRole);
+  const parsingDetails =
+    isParsing && (draftTargetRole || draftFileName)
+      ? `<p class="status-detail">正在按“${escapeHtml(draftTargetRole || "未填写岗位")}”解析：${escapeHtml(draftFileName || "未命名文件")}</p>`
+      : "";
 
   renderShell(
     app,
@@ -39,7 +102,7 @@ export function renderUpload(app, state, helpers) {
         <p class="eyebrow">大模型结构化解析</p>
         <h1>上传简历，先预览确认，再生成面试工作台</h1>
         <p class="intro-copy">
-          文本简历会直接送服务端解析，PDF 会先提取文字再交给大模型生成统一 JSON。你可以在预览页编辑或分区重生成，确认后才保存并渲染页面。
+          填写目标岗位并选择简历后，点击确认才会提交服务端解析。PDF 会先提取文字再交给大模型生成统一 JSON，你可以在预览页编辑或分区重生成。
         </p>
         <div class="feature-grid">
           <div class="feature"><strong>统一结构</strong><span>候选人档案、维度、问题和小贴士都进入同一个 JSON。</span></div>
@@ -51,10 +114,11 @@ export function renderUpload(app, state, helpers) {
 
       <section class="upload-panel">
         <div class="field">
-          <label for="targetRole">目标岗位</label>
-          <input id="targetRole" type="text" value="HR实习生-招聘方向" placeholder="例如：HR实习生-招聘方向" />
+          <label for="targetRole">目标岗位 <span class="required-mark">*</span></label>
+          <input id="targetRole" type="text" value="${escapeAttribute(draftTargetRole)}" placeholder="例如：HR实习生-招聘方向" required aria-required="true" ${isParsing ? "disabled" : ""} />
+          ${roleHint ? `<p class="field-hint">${escapeHtml(roleHint)}</p>` : ""}
         </div>
-        <div class="dropzone" data-action="choose-file">
+        <div class="dropzone ${isParsing ? "disabled" : ""}" data-action="choose-file" ${isParsing ? "aria-disabled=\"true\"" : ""}>
           <div>
             <div class="upload-icon" aria-hidden="true">
               <svg width="25" height="25" viewBox="0 0 24 24" fill="none">
@@ -63,11 +127,23 @@ export function renderUpload(app, state, helpers) {
             </div>
             <h2>选择或拖拽简历文件</h2>
             <p>支持 TXT / Markdown / JSON / PDF。PDF 会先在服务端预解析成文字，再交给大模型处理。</p>
-            <button class="btn" type="button">上传并解析</button>
-            <input class="file-input" id="resumeFile" type="file" accept=".txt,.md,.markdown,.json,.pdf" />
+            <button class="btn secondary" type="button" ${isParsing ? "disabled" : ""}>选择简历</button>
+            <input class="file-input" id="resumeFile" type="file" accept=".txt,.md,.markdown,.json,.pdf" ${isParsing ? "disabled" : ""} />
+          </div>
+        </div>
+        <div class="upload-confirm">
+          <p class="selected-file">${
+            draftFileName ? `已选择：${escapeHtml(draftFileName)}${draftFile?.size ? ` <span>${escapeHtml(formatFileSize(draftFile.size))}</span>` : ""}` : "尚未选择简历文件"
+          }</p>
+          <div class="upload-actions">
+            <button class="btn upload-submit" type="button" data-action="confirm-upload" ${isParsing ? "disabled aria-busy=\"true\"" : ""}>
+              ${isParsing ? '<span class="spinner button-spinner" aria-hidden="true"></span><span>解析中...</span>' : "确认并解析"}
+            </button>
+            ${isParsing ? '<button class="btn danger upload-stop" type="button" data-action="stop-upload">停止</button>' : ""}
           </div>
         </div>
         <p class="small-note">${escapeHtml(llmStatusText(LLM_CONFIG))}</p>
+        ${parsingDetails}
         ${statusMarkup(state)}
         ${errorMarkup(state)}
       </section>
@@ -83,28 +159,116 @@ export function renderUpload(app, state, helpers) {
     resetToUploadState,
     sampleAnalysis,
     deepClone,
+    openHistory,
   });
 
   const fileInput = document.querySelector("#resumeFile");
   const dropzone = document.querySelector(".dropzone");
   const roleInput = document.querySelector("#targetRole");
+  const submitButton = document.querySelector('[data-action="confirm-upload"]');
+  const stopButton = document.querySelector('[data-action="stop-upload"]');
+  let selectedFile = draftFile;
 
-  dropzone.addEventListener("click", () => fileInput.click());
+  const saveDraft = () => {
+    state.uploadDraft = {
+      targetRole: roleInput.value,
+      fileName: selectedFile?.name || "",
+      file: selectedFile,
+    };
+  };
+
+  const setSelectedFile = (file) => {
+    const validationError = validateResumeFile(file);
+    if (validationError) {
+      state.error = validationError;
+      renderUpload(app, state, helpers);
+      return;
+    }
+    selectedFile = file;
+    state.uploadDraft = {
+      targetRole: roleInput.value,
+      fileName: file?.name || "",
+      file: file || null,
+    };
+    state.error = "";
+    renderUpload(app, state, helpers);
+  };
+
+  dropzone.addEventListener("click", () => {
+    if (state.status) return;
+    fileInput.click();
+  });
   fileInput.addEventListener("change", (event) => {
+    if (state.status) return;
     const file = event.target.files && event.target.files[0];
-    if (file) processFile(file, roleInput.value.trim());
+    if (file) setSelectedFile(file);
+    event.target.value = "";
+  });
+  roleInput.addEventListener("input", saveDraft);
+  roleInput.addEventListener("blur", () => {
+    saveDraft();
+    renderUpload(app, state, helpers);
+  });
+  submitButton.addEventListener("click", () => {
+    if (state.status) return;
+    saveDraft();
+    if (!roleInput.value.trim()) {
+      state.error = "请先填写目标岗位";
+      renderUpload(app, state, helpers);
+      return;
+    }
+    if (!selectedFile) {
+      state.error = "请先选择简历文件";
+      renderUpload(app, state, helpers);
+      return;
+    }
+    processFile(selectedFile, roleInput.value.trim());
+  });
+  stopButton?.addEventListener("click", () => {
+    stopParsing();
   });
   dropzone.addEventListener("dragover", (event) => {
     event.preventDefault();
+    if (state.status) return;
     dropzone.classList.add("dragging");
   });
   dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragging"));
   dropzone.addEventListener("drop", (event) => {
     event.preventDefault();
     dropzone.classList.remove("dragging");
+    if (state.status) return;
     const file = event.dataTransfer.files && event.dataTransfer.files[0];
-    if (file) processFile(file, roleInput.value.trim());
+    if (file) setSelectedFile(file);
   });
+}
+
+function validateResumeFile(file) {
+  if (!file) return "请先选择简历文件";
+  const extension = getFileExtension(file.name);
+  if (!SUPPORTED_RESUME_EXTENSIONS.has(extension)) {
+    return "当前仅支持 TXT / Markdown / JSON / PDF 简历";
+  }
+  if (file.size > MAX_RESUME_FILE_SIZE) {
+    return `简历文件不能超过 ${formatFileSize(MAX_RESUME_FILE_SIZE)}`;
+  }
+  if (file.size === 0) {
+    return "简历文件为空，请重新选择";
+  }
+  return "";
+}
+
+function getFileExtension(fileName) {
+  const parts = String(fileName || "").split(".");
+  return parts.length > 1 ? parts.pop().toLowerCase() : "";
+}
+
+function buildRoleHint(targetRole) {
+  const role = String(targetRole || "").trim();
+  if (!role) return "";
+  if (role.length <= 3 || ["开发", "运营", "产品", "设计", "实习生", "岗位"].includes(role)) {
+    return "目标岗位越具体，解析结果越贴合，例如：Unity游戏开发实习生。";
+  }
+  return "";
 }
 
 export function renderPreview(app, state, helpers) {
@@ -149,6 +313,14 @@ export function renderPreview(app, state, helpers) {
             <li>保存位置是浏览器 localStorage。</li>
           </ul>
         </div>
+        ${
+          analysis.meta?.requiresRefresh
+            ? `<div class="card">
+                <h3>需要重生成</h3>
+                <p>这份结果不是围绕 6 个固定底层素质生成的。请优先重生“面试维度”和“定制化面试问题”两个区块。</p>
+              </div>`
+            : ""
+        }
         ${errorMarkup(state)}
         ${statusMarkup(state)}
       </aside>
@@ -164,6 +336,7 @@ export function renderPreview(app, state, helpers) {
     resetToUploadState: helpers.resetToUploadState,
     sampleAnalysis: helpers.sampleAnalysis,
     deepClone: helpers.deepClone,
+    openHistory: helpers.openHistory,
   });
   bindPreviewActions({
     applySectionEdit,
@@ -176,7 +349,7 @@ export function renderPreview(app, state, helpers) {
 }
 
 export function renderWorkbench(app, state, helpers) {
-  const { render, bindHeaderActions, bindWorkbenchActions, openPreview, hydrateWorkbenchState, resetToUploadState, sampleAnalysis, deepClone, renderWorkbench } = helpers;
+  const { render, bindHeaderActions, bindWorkbenchActions, openPreview, hydrateWorkbenchState, resetToUploadState, sampleAnalysis, deepClone, renderWorkbench, openHistory } = helpers;
   const analysis = state.savedAnalysis;
   const selected = state.selectedDimensions;
   const query = state.search.trim().toLowerCase();
@@ -232,6 +405,7 @@ export function renderWorkbench(app, state, helpers) {
     resetToUploadState,
     sampleAnalysis,
     deepClone,
+    openHistory,
   });
   bindWorkbenchActions({
     state,
@@ -247,6 +421,38 @@ export function renderWorkbench(app, state, helpers) {
     }
     state.keepSearchFocus = false;
   }
+}
+
+function historyItem(item, index) {
+  const analysis = item?.analysis || {};
+  const candidate = analysis.candidate || {};
+  const source = analysis.source || {};
+  const dimensions = Array.isArray(analysis.dimensions) ? analysis.dimensions : [];
+  const questions = Array.isArray(analysis.questions) ? analysis.questions : [];
+  const targetRole = item?.targetRole || source.targetRole || candidate.targetRole || "未填写岗位";
+  const fileName = item?.fileName || source.fileName || "未命名简历";
+  const savedAt = item?.savedAt || source.updatedAt || "";
+  return `
+    <article class="history-item">
+      <div class="history-main">
+        <div class="history-avatar">${escapeHtml((candidate.name || targetRole || "历").slice(0, 1))}</div>
+        <div>
+          <h2>${escapeHtml(candidate.name || "候选人")}</h2>
+          <p>${escapeHtml(targetRole)}</p>
+          <div class="history-meta">
+            <span>${escapeHtml(fileName)}</span>
+            <span>${escapeHtml(formatDateTime(savedAt) || "保存时间未知")}</span>
+            <span>${dimensions.length} 个维度</span>
+            <span>${questions.length} 个问题</span>
+          </div>
+        </div>
+      </div>
+      <div class="history-actions">
+        <button class="btn secondary" type="button" data-action="edit-history-item" data-index="${index}">编辑结果</button>
+        <button class="btn" type="button" data-action="open-history-item" data-index="${index}">查看结果</button>
+      </div>
+    </article>
+  `;
 }
 
 function candidateCard(candidate) {
@@ -382,8 +588,8 @@ function interviewerTips(analysis) {
 function emptyState() {
   return `
     <div class="card empty-state">
-      <h3>没有找到匹配的问题</h3>
-      <p>试试调整搜索词或清空筛选维度。</p>
+      <h3>当前没有可用的问题</h3>
+      <p>如果这是旧结果，请回到预览页点击“重新生成”，让问题按 6 个固定底层素质重新产出。</p>
     </div>
   `;
 }
@@ -407,6 +613,7 @@ function getTone(dimension) {
   if (dimension === "是否挑活") return "green";
   if (dimension === "AI工具应用") return "purple";
   if (dimension === "自驱动学习") return "gray";
+  if (dimension === "成就动机") return "blue";
   return "";
 }
 
@@ -540,6 +747,13 @@ function formatDateTime(value) {
   if (!value) return "";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatFileSize(size) {
+  const bytes = Number(size || 0);
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)}MB`;
+  if (bytes >= 1024) return `${Math.ceil(bytes / 1024)}KB`;
+  return `${bytes}B`;
 }
 
 function escapeHtml(value) {

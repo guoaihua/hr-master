@@ -4,6 +4,11 @@ export function createState(savedAnalysis) {
     status: "",
     progress: 0,
     error: "",
+    uploadDraft: {
+      targetRole: "",
+      fileName: "",
+      file: null,
+    },
     selectedDimensions: [],
     search: "",
     keepSearchFocus: false,
@@ -13,6 +18,7 @@ export function createState(savedAnalysis) {
     expanded: {},
     searchTimer: null,
     analysisDraft: null,
+    editingHistoryIndex: null,
     savedAnalysis,
     editorText: {},
     editingSections: {
@@ -30,6 +36,11 @@ export function resetToUploadState(state) {
     status: "",
     progress: 0,
     error: "",
+    uploadDraft: {
+      targetRole: "",
+      fileName: "",
+      file: null,
+    },
     selectedDimensions: [],
     search: "",
   });

@@ -1,6 +1,6 @@
 import express from "express";
 import multer from "multer";
-import { buildInitialMessages, buildSectionMessages, callLLMJson } from "./lib/llm.mjs";
+import { buildInitialMessages, buildSectionMessages, callLLMJson, ensureAnalysisCompleteness } from "./lib/llm.mjs";
 import { extractResumeText } from "./lib/resume.mjs";
 
 const upload = multer({
@@ -17,11 +17,11 @@ const SECTION_META = {
   },
   dimensions: {
     title: "面试维度",
-    description: "用于筛选题目的考察维度。建议 5-7 个，名称要能覆盖岗位核心胜任力。",
+    description: "固定识别 6 个 HR 通用底层素质：聪明度、抗压性、是否挑活、AI工具应用、自驱动学习、成就动机。",
   },
   questions: {
     title: "定制化面试问题",
-    description: "默认 8-12 道题，每题包含简历依据、开放式问题、情景模拟和面试官提示。",
+    description: "围绕固定底层素质生成问题，每题融合多个简历细节，并包含开放式问题、情景模拟和面试官提示。",
   },
   interviewerTips: {
     title: "面试官小贴士",
@@ -67,7 +67,15 @@ export function createApp({ config = loadServerConfig(), staticDir = null, llmCl
         model: config.model,
       });
 
-      const analysis = await llmClient(messages, config);
+      const analysis = ensureAnalysisCompleteness({
+        ...(await llmClient(messages, config)),
+        source: {
+          fileName: file.originalname,
+          targetRole,
+          resumeText,
+          updatedAt: new Date().toISOString(),
+        },
+      });
 
       return res.json({
         ...analysis,
@@ -109,7 +117,11 @@ export function createApp({ config = loadServerConfig(), staticDir = null, llmCl
         sectionMeta: SECTION_META,
       });
       const payload = await llmClient(messages, config);
-      return res.json(payload);
+      const merged = ensureAnalysisCompleteness({
+        ...analysis,
+        ...payload,
+      });
+      return res.json({ [section]: merged[section] });
     } catch (error) {
       return handleError(res, error);
     }

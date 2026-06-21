@@ -3,15 +3,21 @@ import {
   readHistory as readHistoryFromStorage,
   readSavedAnalysis as readSavedAnalysisFromStorage,
   saveAnalysis as saveAnalysisToStorage,
+  updateHistoryAnalysis as updateHistoryAnalysisInStorage,
 } from "./lib/storage.js";
-import { bindHeaderActions, bindPreviewActions, bindWorkbenchActions } from "./legacy/bindings.js";
+import { bindHeaderActions, bindPreviewActions, bindWorkbenchActions, bindHistoryActions } from "./legacy/bindings.js";
 import {
   createState,
   hydrateWorkbenchState as hydrateWorkbenchStateInStore,
   resetToUploadState,
   toggleEditingSection,
 } from "./legacy/store.js";
-import { renderUpload as renderUploadView, renderPreview as renderPreviewView, renderWorkbench as renderWorkbenchView } from "./legacy/views.js";
+import {
+  renderUpload as renderUploadView,
+  renderPreview as renderPreviewView,
+  renderWorkbench as renderWorkbenchView,
+  renderHistory as renderHistoryView,
+} from "./legacy/views.js";
 import {
   ensureLLMConfigured,
   llmStatusText,
@@ -25,17 +31,20 @@ const LLM_CONFIG = {
 };
 
 const STORAGE_KEYS = {
-  current: "interviewmaster.currentAnalysis.v1",
-  history: "interviewmaster.analysisHistory.v1",
+  current: "interviewmaster.currentAnalysis.v2",
+  history: "interviewmaster.analysisHistory.v2",
 };
 
 const DEFAULT_DIMENSIONS = [
-  { name: "聪明度", note: "逻辑思维与问题解决" },
-  { name: "抗压性", note: "逆商与压力处理" },
-  { name: "是否挑活", note: "主动性与责任心" },
-  { name: "AI工具应用", note: "工具意识与质量把控" },
-  { name: "自驱动学习", note: "跨领域学习与迁移" },
+  { name: "聪明度", note: "复杂信息拆解、关键判断、逻辑推理与问题解决" },
+  { name: "抗压性", note: "面对压力、挫折、冲突和突发变化时的稳定度与补救能力" },
+  { name: "是否挑活", note: "对基础、琐碎、边界模糊任务的责任心、服务意识和质量标准" },
+  { name: "AI工具应用", note: "用 AI 提升效率，并校验、修正和控制风险" },
+  { name: "自驱动学习", note: "面对陌生领域时主动补课、建立框架、迁移应用" },
+  { name: "成就动机", note: "主动追求结果、复盘改进，并把事情做出可验证成果" },
 ];
+
+const CORE_DIMENSION_NAMES = DEFAULT_DIMENSIONS.map((item) => item.name);
 
 const SECTION_META = {
   candidate: {
@@ -44,11 +53,11 @@ const SECTION_META = {
   },
   dimensions: {
     title: "面试维度",
-    description: "用于筛选题目的考察维度。建议 5-7 个，名称要能覆盖岗位核心胜任力。",
+    description: "固定识别 6 个 HR 通用底层素质：聪明度、抗压性、是否挑活、AI工具应用、自驱动学习、成就动机。",
   },
   questions: {
     title: "定制化面试问题",
-    description: "默认 8-12 道题，每题包含简历依据、开放式问题、情景模拟和面试官提示。",
+    description: "围绕固定底层素质生成问题，每题融合多个简历细节，并包含开放式问题、情景模拟和面试官提示。",
   },
   interviewerTips: {
     title: "面试官小贴士",
@@ -392,6 +401,30 @@ const SAMPLE_ANALYSIS = {
       situational: "如果将学生会生活部经验迁移到新员工融入计划设计中，你会怎么做？",
       tips: ["考察经验迁移", "追问反思深度", "观察流程设计能力"],
     },
+    {
+      id: "q11",
+      dimension: "成就动机",
+      topic: "对招聘结果的主动追求与复盘",
+      background:
+        "候选人简历中同时出现 C++ 开发 5 人、售前签约 7 人、员工关系处理 23 人次等量化结果，也有多段 HR 实习经历，需要判断这些成果是被动参与还是主动推动。",
+      openEnded:
+        "你简历里提到过多个量化结果，请选一个你最有成就感的结果讲清楚：目标是谁定的，你具体负责什么，中间做过哪些主动调整，最后怎么确认这个结果有效？",
+      situational:
+        "如果你负责一个招聘渠道两周后发现投递量不少，但合适候选人很少，主管没有明确要求你改进，你会不会主动介入？你会如何分析并推动结果变化？",
+      tips: ["追问目标来源和个人贡献", "核实数据口径", "观察是否有主动复盘和持续改进意识"],
+    },
+    {
+      id: "q12",
+      dimension: "成就动机",
+      topic: "从完成任务到做出可验证成果",
+      background:
+        "候选人既做过招聘流程跟进，也做过办公室助理、学生会生活部部长等执行性较强的工作，这些经历能观察其是否满足于完成交办事项，还是会主动定义更好的结果标准。",
+      openEnded:
+        "请讲一次你原本只需要完成基础执行，但你主动把事情做得更好的经历。当时你为什么愿意多做一步？多做之后带来了什么变化？",
+      situational:
+        "如果你入职后负责整理候选人台账，主管只要求“不出错”，但你发现数据可以帮助判断渠道质量，你会怎么把这件基础工作做出更高价值？",
+      tips: ["关注是否主动设定更高标准", "追问具体改进动作", "观察是否能把基础工作连接到业务结果"],
+    },
   ],
   interviewerTips: [
     "针对简历中的量化数据，使用 STAR 法追问其个人角色、具体行动和数据口径。",
@@ -413,8 +446,10 @@ const SAMPLE_ANALYSIS = {
 };
 
 let app = null;
+let parseAbortController = null;
 
-const state = createState(readSavedAnalysisFromStorage(STORAGE_KEYS, normalizeAnalysis));
+const persistedAnalysis = readSavedAnalysisFromStorage(STORAGE_KEYS, normalizeAnalysis);
+const state = createState(isCompatibleAnalysis(persistedAnalysis) ? persistedAnalysis : null);
 
 if (state.savedAnalysis) {
   state.view = "workbench";
@@ -429,7 +464,13 @@ function getViewHelpers() {
     bindHeaderActions,
     bindPreviewActions,
     bindWorkbenchActions,
+    bindHistoryActions,
     processFile,
+    stopParsing,
+    openHistory,
+    openHistoryItem,
+    editHistoryItem,
+    readHistory,
     applySectionEdit,
     regenerateSection,
     confirmAndSave,
@@ -451,6 +492,10 @@ function render() {
     renderPreviewView(app, state, getViewHelpers());
     return;
   }
+  if (state.view === "history") {
+    renderHistoryView(app, state, getViewHelpers());
+    return;
+  }
   if (state.view === "workbench") {
     renderWorkbenchView(app, state, getViewHelpers());
     return;
@@ -470,15 +515,31 @@ function renderWorkbench() {
   renderWorkbenchView(app, state, getViewHelpers());
 }
 
+function renderHistory() {
+  renderHistoryView(app, state, getViewHelpers());
+}
+
 async function processFile(file, targetRole) {
   state.error = "";
-  state.status = "正在读取简历文件";
-  state.progress = 16;
-  render();
+  const normalizedTargetRole = String(targetRole || "").trim();
 
   try {
+    if (!normalizedTargetRole) {
+      throw new Error("请先填写目标岗位");
+    }
+    if (!file) {
+      throw new Error("请先选择简历文件");
+    }
     ensureLLMConfigured(LLM_CONFIG);
     assertSupportedResumeFile(file);
+
+    parseAbortController?.abort();
+    parseAbortController = new AbortController();
+    const parseSignal = parseAbortController.signal;
+
+    state.status = "正在读取简历文件";
+    state.progress = 16;
+    render();
 
     state.status = "正在提交大模型解析简历";
     state.progress = 58;
@@ -486,28 +547,53 @@ async function processFile(file, targetRole) {
 
     const rawAnalysis = await generateInitialAnalysis({
       file,
-      targetRole,
+      targetRole: normalizedTargetRole,
+      signal: parseSignal,
     });
+    if (parseSignal.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
 
     const analysis = normalizeAnalysis(rawAnalysis, {
       fileName: file.name,
-      targetRole,
+      targetRole: normalizedTargetRole,
       updatedAt: new Date().toISOString(),
     });
 
     state.progress = 100;
     render();
+    parseAbortController = null;
     openPreview(analysis);
   } catch (error) {
+    if (error.name === "AbortError") {
+      state.status = "";
+      state.progress = 0;
+      state.error = "已停止本次解析，结果不会保存";
+      parseAbortController = null;
+      render();
+      return;
+    }
     state.status = "";
     state.progress = 0;
     state.error = error.message || "解析失败";
+    parseAbortController = null;
     render();
   }
 }
 
-async function generateInitialAnalysis({ file, targetRole }) {
-  return parseResumeWithServer(file, targetRole, LLM_CONFIG, HARDCODED_MODEL_ANALYSIS, deepClone);
+function stopParsing() {
+  const controller = parseAbortController;
+  if (!controller) return;
+  controller.abort();
+  state.status = "";
+  state.progress = 0;
+  state.error = "已停止本次解析，结果不会保存";
+  parseAbortController = null;
+  render();
+}
+
+async function generateInitialAnalysis({ file, targetRole, signal }) {
+  return parseResumeWithServer(file, targetRole, LLM_CONFIG, HARDCODED_MODEL_ANALYSIS, deepClone, { signal });
 }
 
 async function regenerateSection(section) {
@@ -568,7 +654,12 @@ function confirmAndSave() {
       ...state.analysisDraft.source,
       updatedAt: new Date().toISOString(),
     });
-    saveAnalysisToStorage(STORAGE_KEYS, confirmed);
+    if (Number.isInteger(state.editingHistoryIndex)) {
+      updateHistoryAnalysisInStorage(STORAGE_KEYS, state.editingHistoryIndex, confirmed);
+      state.editingHistoryIndex = null;
+    } else {
+      saveAnalysisToStorage(STORAGE_KEYS, confirmed);
+    }
     state.savedAnalysis = confirmed;
     state.view = "workbench";
     hydrateWorkbenchState(confirmed);
@@ -581,6 +672,7 @@ function confirmAndSave() {
 
 function openPreview(analysis) {
   state.analysisDraft = normalizeAnalysis(analysis, analysis.source);
+  state.editingHistoryIndex = null;
   syncEditorText();
   state.view = "preview";
   state.status = "";
@@ -593,12 +685,51 @@ function hydrateWorkbenchState(analysis) {
   hydrateWorkbenchStateInStore(state, analysis);
 }
 
+function openHistory() {
+  state.view = "history";
+  state.status = "";
+  state.progress = 0;
+  state.error = "";
+  renderHistory();
+}
+
+function openHistoryItem(index) {
+  const item = readHistory()[index];
+  if (!item?.analysis) {
+    state.error = "没有找到这条历史结果";
+    renderHistory();
+    return;
+  }
+  const analysis = normalizeAnalysis(item.analysis, item.analysis.source);
+  state.savedAnalysis = analysis;
+  state.view = "workbench";
+  hydrateWorkbenchState(analysis);
+  render();
+}
+
+function editHistoryItem(index) {
+  const item = readHistory()[index];
+  if (!item?.analysis) {
+    state.error = "没有找到这条历史结果";
+    renderHistory();
+    return;
+  }
+  openPreview(normalizeAnalysis(item.analysis, item.analysis.source));
+  state.editingHistoryIndex = index;
+}
+
 // LLM helpers moved to src/lib/llm.js
 
 function normalizeAnalysis(raw, sourceFallback = {}) {
   const candidate = normalizeCandidate(raw?.candidate || {});
   const dimensions = normalizeDimensions(raw?.dimensions);
-  const questions = normalizeQuestions(raw?.questions, dimensions);
+  const questions = ensurePreviewQuestions(normalizeQuestions(raw?.questions, dimensions), {
+    candidate,
+    dimensions,
+    source: {
+      resumeText: sourceFallback.resumeText || raw?.source?.resumeText || "",
+    },
+  });
   const interviewerTips = toStringArray(raw?.interviewerTips);
   const source = {
     fileName: sourceFallback.fileName || raw?.source?.fileName || "",
@@ -606,7 +737,7 @@ function normalizeAnalysis(raw, sourceFallback = {}) {
     resumeText: sourceFallback.resumeText || raw?.source?.resumeText || "",
     updatedAt: sourceFallback.updatedAt || raw?.source?.updatedAt || new Date().toISOString(),
   };
-  candidate.targetRole = candidate.targetRole || source.targetRole;
+  candidate.targetRole = source.targetRole || candidate.targetRole;
 
   return {
     candidate,
@@ -618,6 +749,7 @@ function normalizeAnalysis(raw, sourceFallback = {}) {
       parserVersion: raw?.meta?.parserVersion || "v1",
       model: sourceFallback.model || raw?.meta?.model || LLM_CONFIG.model,
       confidence: Number(raw?.meta?.confidence || 0),
+      requiresRefresh: !isCompatibleQuestions(questions),
     },
   };
 }
@@ -646,7 +778,7 @@ function normalizeCandidate(candidate) {
 }
 
 function normalizeDimensions(dimensions) {
-  const source = Array.isArray(dimensions) && dimensions.length ? dimensions : DEFAULT_DIMENSIONS;
+  const source = areCoreDimensions(dimensions) ? dimensions : DEFAULT_DIMENSIONS;
   return source.map((dimension) => ({
     name: String(dimension.name || ""),
     note: String(dimension.note || ""),
@@ -656,10 +788,12 @@ function normalizeDimensions(dimensions) {
 function normalizeQuestions(questions, dimensions) {
   const validDimensions = new Set(dimensions.map((dimension) => dimension.name));
   return (Array.isArray(questions) ? questions : []).map((question, index) => {
-    const dimension = String(question.dimension || dimensions[0]?.name || "综合能力");
+    const inferredDimension = inferCoreDimension(question, dimensions);
+    const rawDimension = String(question.dimension || "");
+    const dimension = validDimensions.has(rawDimension) ? rawDimension : inferredDimension;
     return {
       id: String(question.id || `q${index + 1}`),
-      dimension: validDimensions.has(dimension) ? dimension : dimension,
+      dimension,
       topic: String(question.topic || `定制问题 ${index + 1}`),
       background: String(question.background || ""),
       openEnded: String(question.openEnded || ""),
@@ -708,6 +842,151 @@ function formatDisplayItem(item) {
 
 function toPrettyJson(value) {
   return JSON.stringify(value, null, 2);
+}
+
+function areCoreDimensions(dimensions) {
+  if (!Array.isArray(dimensions) || dimensions.length !== CORE_DIMENSION_NAMES.length) return false;
+  const names = dimensions.map((item) => String(item?.name || ""));
+  return CORE_DIMENSION_NAMES.every((name) => names.includes(name));
+}
+
+function isCompatibleAnalysis(analysis) {
+  if (!analysis) return false;
+  return areCoreDimensions(analysis.dimensions) && isCompatibleQuestions(analysis.questions);
+}
+
+function isCompatibleQuestions(questions) {
+  if (!Array.isArray(questions) || !questions.length) return false;
+  return questions.every((question) => CORE_DIMENSION_NAMES.includes(String(question?.dimension || "")));
+}
+
+function inferCoreDimension(question, dimensions) {
+  const text = [
+    question?.dimension,
+    question?.topic,
+    question?.background,
+    question?.openEnded,
+    question?.situational,
+    ...(Array.isArray(question?.tips) ? question.tips : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const rules = [
+    { name: "AI工具应用", keywords: ["ai", "chatgpt", "prompt", "自动化", "工具", "效率", "生成内容"] },
+    { name: "抗压性", keywords: ["压力", "冲突", "突发", "延期", "加班", "挫折", "失败", "危机"] },
+    { name: "自驱动学习", keywords: ["学习", "适应", "上手", "陌生", "迁移", "新领域", "自学"] },
+    { name: "是否挑活", keywords: ["琐碎", "基础工作", "支持", "配合", "脏活", "杂活", "边界", "执行"] },
+    { name: "成就动机", keywords: ["结果", "成果", "提升", "目标", "复盘", "推动", "改进", "成就"] },
+    { name: "聪明度", keywords: ["判断", "拆解", "分析", "设计", "优先级", "问题解决", "逻辑"] },
+  ];
+
+  const matched = rules.find((rule) => rule.keywords.some((keyword) => text.includes(keyword)));
+  if (matched) return matched.name;
+  return dimensions[0]?.name || "聪明度";
+}
+
+function ensurePreviewQuestions(questions, analysis) {
+  const usable = Array.isArray(questions)
+    ? questions.filter((question) => question.openEnded || question.situational || question.background || question.topic)
+    : [];
+
+  if (usable.length) {
+    const byDimension = new Map();
+    usable.forEach((question) => {
+      if (!byDimension.has(question.dimension)) {
+        byDimension.set(question.dimension, question);
+      }
+    });
+    return analysis.dimensions.map((dimension, index) => {
+      return (
+        byDimension.get(dimension.name) ||
+        buildPreviewFallbackQuestion(dimension.name, index, analysis.candidate, analysis.source?.resumeText || "")
+      );
+    });
+  }
+
+  return analysis.dimensions.map((dimension, index) =>
+    buildPreviewFallbackQuestion(dimension.name, index, analysis.candidate, analysis.source?.resumeText || ""),
+  );
+}
+
+function buildPreviewFallbackQuestion(dimensionName, index, candidate, resumeText) {
+  const fallbackMap = {
+    聪明度: {
+      topic: "复杂信息拆解与判断能力",
+      openEnded: "请结合你简历中最复杂的一段经历，讲讲你当时是如何拆解问题、识别关键点并做出判断的？",
+    },
+    抗压性: {
+      topic: "压力下的稳定度与补救",
+      openEnded: "请分享一次你同时面对时间压力、任务冲突或结果不及预期时的经历。你是怎么稳住并处理的？",
+    },
+    是否挑活: {
+      topic: "对基础工作和边界任务的态度",
+      openEnded: "请讲一次工作本身比较琐碎、基础，或者不完全属于你职责范围，但你仍然认真接住并做好的经历。",
+    },
+    AI工具应用: {
+      topic: "用 AI 提效并把控质量",
+      openEnded: "你有没有用过 AI 工具辅助学习、整理信息或提升效率？请讲一个真实例子，包括你如何判断输出是否可靠。",
+    },
+    自驱动学习: {
+      topic: "陌生领域的主动补课能力",
+      openEnded: "请讲一次你为了完成任务或转向新方向，主动补课、建立框架并快速上手的经历。",
+    },
+    成就动机: {
+      topic: "从完成任务到做出结果",
+      openEnded: "请讲一个你不满足于完成交办，而是主动把事情做出更好结果的经历。当时你为什么愿意多走一步？",
+    },
+  };
+
+  const template = fallbackMap[dimensionName];
+  return {
+    id: `q-preview-fallback-${index + 1}`,
+    dimension: dimensionName,
+    topic: template.topic,
+    background: buildPreviewFallbackBackground(dimensionName, candidate, resumeText),
+    openEnded: template.openEnded,
+    situational: buildPreviewRoleSpecificSituational(dimensionName, candidate?.targetRole || "", resumeText),
+    tips: ["结合简历细节追问", "核实个人贡献", "观察是否能沉淀稳定方法"],
+  };
+}
+
+function buildPreviewFallbackBackground(dimensionName, candidate, resumeText) {
+  const resumeLines = String(resumeText || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const highlights = Array.isArray(candidate?.highlights) ? candidate.highlights.slice(0, 2) : [];
+  const evidence = [...resumeLines, ...highlights].filter(Boolean).slice(0, 4);
+  if (!evidence.length) {
+    return `简历中关于${dimensionName}的直接证据有限，需要在面试中重点验证。`;
+  }
+  return `结合简历中的这些线索进一步验证${dimensionName}：${evidence.join("；")}。`;
+}
+
+function buildPreviewRoleSpecificSituational(dimensionName, targetRole, resumeText) {
+  const role = String(targetRole || "").trim() || "该岗位";
+  const roleCue = inferPreviewRoleCue(role, resumeText);
+  const templates = {
+    聪明度: `如果你作为${role}接手一个信息不完整但必须尽快推进的${roleCue}任务，你会如何拆解问题、识别关键点并做出初步判断？`,
+    抗压性: `如果你作为${role}同时遇到交付周期紧、需求变化和排查问题叠加的情况，你会如何稳住节奏并推进解决？`,
+    是否挑活: `如果你作为${role}被分配到一项基础但没人愿意接的${roleCue}工作，例如补文档、排查遗留问题或重复验证，你会怎么理解它的价值并把它做好？`,
+    AI工具应用: `如果你作为${role}需要借助 AI 工具提升${roleCue}效率，你会把 AI 用在哪些环节，又会如何验证输出质量？`,
+    自驱动学习: `如果你作为${role}需要在 3 天内补齐一个你不熟悉的${roleCue}知识点并投入实战，你会怎么制定学习和验证路径？`,
+    成就动机: `如果你作为${role}完成了基本交付，但你判断${roleCue}还有明显优化空间，你会如何主动设定更高目标并证明改进结果？`,
+  };
+  return templates[dimensionName] || `如果你作为${role}在实际工作中遇到一个需要重点体现${dimensionName}的场景，你会如何处理？`;
+}
+
+function inferPreviewRoleCue(targetRole, resumeText) {
+  const text = `${targetRole} ${resumeText}`.toLowerCase();
+  if (text.includes("unity") || text.includes("ue") || text.includes("unreal") || text.includes("游戏")) return "开发与体验优化";
+  if (text.includes("前端") || text.includes("react") || text.includes("web")) return "页面与交互实现";
+  if (text.includes("后端") || text.includes("server") || text.includes("java") || text.includes("golang")) return "接口与系统稳定性";
+  if (text.includes("算法") || text.includes("模型") || text.includes("machine learning")) return "模型效果与实验迭代";
+  if (text.includes("产品")) return "需求拆解与跨团队协作";
+  return "核心工作";
 }
 
 function deepClone(value) {

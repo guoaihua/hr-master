@@ -138,3 +138,16 @@ http://localhost:3001/
 - 服务端 API 化的 LLM 调用
 - PDF 服务端预解析
 - 基础单元测试与 API 测试
+
+
+
+docker swarm init
+docker build -t interviewmaster:latest .
+docker service create \
+  --name interviewmaster \
+  --publish 3001:3001 \
+  --env LLM_API_KEY=sk-1z04BLtScjucChTa10pIgJrb5u7RRPYVgwqJFLflSg1D6Y8P \
+  --env LLM_BASE_URL=https://www.dmxapi.cn/v1 \
+  --env LLM_MODEL=mimo-v2.5-pro \
+  --env PORT=3001 \
+  interviewmaster:latest

@@ -6,6 +6,7 @@ export function bindHeaderActions({
   resetToUploadState,
   sampleAnalysis,
   deepClone,
+  openHistory,
 }) {
   document.querySelectorAll("[data-action='restart'], [data-action='back-upload']").forEach((button) => {
     button.addEventListener("click", () => {
@@ -25,6 +26,12 @@ export function bindHeaderActions({
   document.querySelectorAll("[data-action='load-sample']").forEach((button) => {
     button.addEventListener("click", () => {
       openPreview(deepClone(sampleAnalysis));
+    });
+  });
+
+  document.querySelectorAll("[data-action='open-history']").forEach((button) => {
+    button.addEventListener("click", () => {
+      openHistory();
     });
   });
 }
@@ -107,6 +114,20 @@ export function bindWorkbenchActions({ state, renderWorkbench }) {
     button.addEventListener("click", () => {
       state.search = "";
       renderWorkbench();
+    });
+  });
+}
+
+export function bindHistoryActions({ openHistoryItem, editHistoryItem }) {
+  document.querySelectorAll("[data-action='open-history-item']").forEach((button) => {
+    button.addEventListener("click", () => {
+      openHistoryItem(Number(button.dataset.index));
+    });
+  });
+
+  document.querySelectorAll("[data-action='edit-history-item']").forEach((button) => {
+    button.addEventListener("click", () => {
+      editHistoryItem(Number(button.dataset.index));
     });
   });
 }
